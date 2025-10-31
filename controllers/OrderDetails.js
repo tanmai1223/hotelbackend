@@ -174,72 +174,64 @@ export const putOrderById = async (req, res) => {
       });
     }
 
-    const previousStatus = existing.status; // ✅ store previous status
+    const previousStatus = existing.status;
+    console.log("➡️ PUT /order/" + id);
+    console.log("   🧾 Old status:", previousStatus);
+    console.log("   🧾 New status:", status);
+    console.log("   👨‍🍳 Chef ID:", existing.chef?._id);
+    console.log("   👨‍🍳 Chef type:", typeof existing.chef);
+    console.log("   🧮 Current chef load:", existing.chef?.activeOrders);
 
-    // ✅ Update only provided fields
     if (averageTime !== undefined) existing.averageTime = averageTime;
     if (status !== undefined) existing.status = status;
 
     // =====================================================
-    // 🍽️ Only when status CHANGES to served
+    // 🍽️ If status changes to "served"
     // =====================================================
     if (previousStatus !== "served" && status === "served") {
-      // 🪑 Free the table if dine-in
+      console.log("🟢 Status is being changed to served...");
+
+      // Free the table
       if (existing.table) {
         await Table.findByIdAndUpdate(existing.table._id, { flag: false });
-        console.log(`🪑 Table ${existing.table.number} freed`);
+        console.log(`🪑 Table ${existing.table._id} freed`);
       }
 
-      // 👨‍🍳 Decrease chef load safely
-      if (
-        existing.chef &&
-        typeof existing.chef !== "string" &&
-        existing.chef._id
-      ) {
-        await Chef.findOneAndUpdate(
-          { _id: existing.chef._id, activeOrders: { $gt: 0 } }, // only if > 0
+      // Decrement chef load safely
+      if (existing.chef && existing.chef._id) {
+        const before = await Chef.findById(existing.chef._id);
+        console.log("Before decrement chef load:", before.activeOrders);
+
+        const after = await Chef.findOneAndUpdate(
+          { _id: existing.chef._id, activeOrders: { $gt: 0 } },
           { $inc: { activeOrders: -1 } },
           { new: true }
         );
 
-        const updatedChef = await Chef.findById(existing.chef._id);
-        console.log(
-          `✅ Chef ${updatedChef.name} load reduced to ${updatedChef.activeOrders}`
-        );
+        console.log("After decrement chef load:", after?.activeOrders);
       } else {
-        console.warn(
-          `⚠️ Skipping chef update for order ${id} — invalid or old chef reference.`
-        );
+        console.log("⚠️ Skipping chef update — invalid or old reference");
       }
+    } else {
+      console.log("⚪ No change in chef or table (status unchanged)");
     }
 
     await existing.save();
-
-    const updated = await Order.findById(id)
-      .populate("chef")
-      .populate("table");
+    const updated = await Order.findById(id).populate("chef").populate("table");
 
     res.status(200).json({
       status: "success",
-      message: `Order updated successfully${
-        previousStatus !== "served" &&
-        status === "served" &&
-        updated.chef &&
-        typeof updated.chef !== "string"
-          ? ` — ${updated.chef.name}'s load reduced`
-          : ""
-      }`,
       data: updated,
     });
   } catch (err) {
     console.error("❌ Error updating order:", err);
     res.status(500).json({
-      status: "error",
-      message: "Failed to update order",
-      error: err.message,
+      status: "fail",
+      message: err.message,
     });
   }
 };
+
 
 
 

@@ -1,14 +1,21 @@
 import Order from "../models/orders.js";
 import Table from "../models/table.js";
-import Chef from "../models/chef.js"; 
+import Chef from "../models/chef.js";
 
 export const getOrder = async (req, res) => {
   try {
-    const data = (await Order.find().populate("table").sort({"time":-1}));
-    res.status(200).json({ status: "success", data });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ status: "fail", message: "Failed to fetch orders" });
+    const orders = await Order.find()
+      .populate("chef")
+      .populate("table")
+      .sort({ time: -1 });
+
+    res.status(200).json({
+      status: "success",
+      results: orders.length,
+      data: orders,
+    });
+  } catch (err) {
+    res.status(500).json({ status: "fail", message: "Could not fetch orders" });
   }
 };
 
@@ -24,7 +31,7 @@ export const putOrder = async (req, res) => {
       averageTime,
     } = req.body;
 
-    // 🪑 Dine-in validation
+    // ✅ Dine-in validation
     if (dineIn && (!numberOfPeople || numberOfPeople <= 0)) {
       return res.status(400).json({
         status: "fail",
@@ -34,7 +41,9 @@ export const putOrder = async (req, res) => {
 
     let bookedTable = null;
 
-    // 🪑 Table allocation logic
+    // =====================================================
+    // 🪑 Table allocation logic based on number of people
+    // =====================================================
     if (dineIn) {
       const tableRanges = [
         { min: 1, max: 2, size: 2 },
@@ -50,19 +59,23 @@ export const putOrder = async (req, res) => {
       if (!range) {
         return res.status(400).json({
           status: "fail",
-          message: "We cannot accommodate more than 8 people at a single table",
+          message:
+            "We cannot accommodate more than 8 people at a single table",
         });
       }
 
+      // ✅ Find exact or next larger available table
       bookedTable = await Table.findOne({ tableSize: range.size, flag: false });
+
       if (!bookedTable) {
-        const larger = [2, 4, 6, 8].filter((s) => s > range.size);
-        for (let size of larger) {
+        const largerSizes = [2, 4, 6, 8].filter((s) => s > range.size);
+        for (const size of largerSizes) {
           bookedTable = await Table.findOne({ tableSize: size, flag: false });
           if (bookedTable) break;
         }
       }
 
+      // ❌ No table found
       if (!bookedTable) {
         return res.status(400).json({
           status: "fail",
@@ -70,12 +83,16 @@ export const putOrder = async (req, res) => {
         });
       }
 
+      // ✅ Mark table as occupied
       bookedTable.flag = true;
       await bookedTable.save();
     }
 
-    // 👨‍🍳 Assign Chef Logic
+    // =====================================================
+    // 👨‍🍳 Assign chef with least activeOrders
+    // =====================================================
     const chefs = await Chef.find();
+
     if (chefs.length === 0) {
       return res.status(500).json({
         status: "fail",
@@ -83,15 +100,16 @@ export const putOrder = async (req, res) => {
       });
     }
 
-    // 🔹 Find chef with minimum active orders
     const minOrders = Math.min(...chefs.map((c) => c.activeOrders));
     const availableChefs = chefs.filter((c) => c.activeOrders === minOrders);
 
-    // 🔹 Pick one randomly if multiple have same load
+    // Pick randomly if multiple chefs have same load
     const assignedChef =
       availableChefs[Math.floor(Math.random() * availableChefs.length)];
 
-    // ✅ Create new order
+    // =====================================================
+    // 🧾 Create new order
+    // =====================================================
     const newOrder = new Order({
       name,
       numberOfPeople,
@@ -103,20 +121,31 @@ export const putOrder = async (req, res) => {
       averageTime: averageTime || 15,
       time: new Date(),
       status: "processing",
-      chef: assignedChef.name, // ✅ Store assigned chef name
+      chef: assignedChef._id,
     });
 
     await newOrder.save();
 
-    // ✅ Increment chef’s load
-    assignedChef.activeOrders += 1;
-    await assignedChef.save();
+    // =====================================================
+    // 🔢 Increment chef’s activeOrders safely
+    // =====================================================
+    const chef = await Chef.findById(assignedChef._id);
+    if (chef) {
+      chef.activeOrders = (chef.activeOrders || 0) + 1;
+      await chef.save();
+    }
+
+    // =====================================================
+    // ✅ Populate order for response
+    // =====================================================
+    const populatedOrder = await Order.findById(newOrder._id)
+      .populate("chef")
+      .populate("table");
 
     res.status(201).json({
       status: "success",
       message: `Order created successfully and assigned to ${assignedChef.name}`,
-      data: newOrder,
-      assignedChef,
+      data: populatedOrder,
     });
   } catch (error) {
     console.error("❌ Create Order Error:", error);
@@ -128,48 +157,51 @@ export const putOrder = async (req, res) => {
   }
 };
 
+
 export const putOrderById = async (req, res) => {
   try {
     const { id } = req.params;
     const { averageTime, status } = req.body;
 
-    const existing = await Order.findById(id);
+    const existing = await Order.findById(id)
+      .populate("chef")
+      .populate("table");
     if (!existing) {
-      return res.status(404).json({ status: "fail", message: "Order not found" });
+      return res
+        .status(404)
+        .json({ status: "fail", message: "Order not found" });
     }
 
-    // Update only provided fields
+    // ✅ Update only the provided fields
     if (averageTime !== undefined) existing.averageTime = averageTime;
     if (status !== undefined) existing.status = status;
 
-    await existing.save();
-
-    // ✅ Handle only if status becomes served
+    // =====================================================
+    // 🍽️ If status changes to "served", free up resources
+    // =====================================================
     if (status === "served") {
-      // 🪑 Free table (only if dine-in)
+      // 🪑 Free the table if dine-in
       if (existing.table) {
-        await Table.findByIdAndUpdate(existing.table, { flag: false });
+        await Table.findByIdAndUpdate(existing.table._id, { flag: false });
       }
 
       // 👨‍🍳 Reduce chef load safely
-      if (existing.chef) {
-  const chef = await Chef.findOne({ name: existing.chef });
-  if (chef) {
-    chef.activeOrders = Math.max(0, chef.activeOrders - 1);
-    await chef.save();
-  }
-}
+      if (existing.chef && existing.chef._id) {
+        await Chef.findByIdAndUpdate(existing.chef._id, {
+          $inc: { activeOrders: -1 },
+        });
+      }
     }
 
-    const updated = await Order.findById(id)
-      .populate("table")
-      .populate("chef");
+    await existing.save();
+
+    const updated = await Order.findById(id).populate("chef").populate("table");
 
     res.status(200).json({
       status: "success",
       message: `Order updated successfully${
         status === "served" && updated.chef
-          ? ` — ${updated.chef.name || updated.chef}'s load reduced`
+          ? ` — ${updated.chef.name}'s load reduced`
           : ""
       }`,
       data: updated,
@@ -201,9 +233,9 @@ export const totals = async (req, res) => {
     const orders = await Order.find({}, "orderItem");
     let totalRevenue = 0;
 
-    orders.forEach(order => {
+    orders.forEach((order) => {
       if (Array.isArray(order.orderItem)) {
-        order.orderItem.forEach(item => {
+        order.orderItem.forEach((item) => {
           const price = item.price || 0;
           const qty = item.quantity || 1;
           totalRevenue += price * qty;
@@ -221,7 +253,6 @@ export const totals = async (req, res) => {
         revenue: totalRevenue,
       },
     });
-
   } catch (err) {
     console.error("❌ Error fetching totals:", err);
     res.status(500).json({
@@ -314,7 +345,10 @@ export const weeklyRevenue = async (req, res) => {
         return sum + price * qty;
       }, 0);
 
-      revenueByDay.set(dayIndex, (revenueByDay.get(dayIndex) || 0) + orderTotal);
+      revenueByDay.set(
+        dayIndex,
+        (revenueByDay.get(dayIndex) || 0) + orderTotal
+      );
     }
 
     // Map day index to weekday name
@@ -337,4 +371,3 @@ export const weeklyRevenue = async (req, res) => {
     });
   }
 };
-

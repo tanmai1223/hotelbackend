@@ -166,13 +166,14 @@ export const putOrderById = async (req, res) => {
     const existing = await Order.findById(id)
       .populate("chef")
       .populate("table");
+
     if (!existing) {
       return res
         .status(404)
         .json({ status: "fail", message: "Order not found" });
     }
 
-    // ✅ Update only the provided fields
+    // ✅ Update only provided fields
     if (averageTime !== undefined) existing.averageTime = averageTime;
     if (status !== undefined) existing.status = status;
 
@@ -185,22 +186,39 @@ export const putOrderById = async (req, res) => {
         await Table.findByIdAndUpdate(existing.table._id, { flag: false });
       }
 
-      // 👨‍🍳 Reduce chef load safely
-      if (existing.chef && existing.chef._id) {
-        await Chef.findByIdAndUpdate(existing.chef._id, {
-          $inc: { activeOrders: -1 },
-        });
+      // 👨‍🍳 Reduce chef load safely — only if valid ObjectId
+      if (
+        existing.chef &&
+        typeof existing.chef !== "string" && // skip old string chefs
+        existing.chef._id
+      ) {
+        const chefDoc = await Chef.findById(existing.chef._id);
+
+        if (chefDoc) {
+          const newCount =
+            chefDoc.activeOrders > 0 ? chefDoc.activeOrders - 1 : 0;
+
+          await Chef.findByIdAndUpdate(chefDoc._id, {
+            $set: { activeOrders: newCount },
+          });
+        }
+      } else {
+        console.warn(
+          `⚠️ Skipping chef update for order ${id} — invalid or old chef reference.`
+        );
       }
     }
 
     await existing.save();
 
-    const updated = await Order.findById(id).populate("chef").populate("table");
+    const updated = await Order.findById(id)
+      .populate("chef")
+      .populate("table");
 
     res.status(200).json({
       status: "success",
       message: `Order updated successfully${
-        status === "served" && updated.chef
+        status === "served" && updated.chef && typeof updated.chef !== "string"
           ? ` — ${updated.chef.name}'s load reduced`
           : ""
       }`,
@@ -215,6 +233,8 @@ export const putOrderById = async (req, res) => {
     });
   }
 };
+
+
 
 export const totals = async (req, res) => {
   try {

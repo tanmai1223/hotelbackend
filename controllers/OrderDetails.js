@@ -174,14 +174,16 @@ export const putOrderById = async (req, res) => {
       });
     }
 
+    const previousStatus = existing.status; // ✅ store previous status
+
     // ✅ Update only provided fields
     if (averageTime !== undefined) existing.averageTime = averageTime;
     if (status !== undefined) existing.status = status;
 
     // =====================================================
-    // 🍽️ If status changes to "served", free up resources
+    // 🍽️ Only when status CHANGES to served
     // =====================================================
-    if (status === "served") {
+    if (previousStatus !== "served" && status === "served") {
       // 🪑 Free the table if dine-in
       if (existing.table) {
         await Table.findByIdAndUpdate(existing.table._id, { flag: false });
@@ -194,20 +196,16 @@ export const putOrderById = async (req, res) => {
         typeof existing.chef !== "string" &&
         existing.chef._id
       ) {
-        const chefDoc = await Chef.findById(existing.chef._id);
+        await Chef.findOneAndUpdate(
+          { _id: existing.chef._id, activeOrders: { $gt: 0 } }, // only if > 0
+          { $inc: { activeOrders: -1 } },
+          { new: true }
+        );
 
-        if (chefDoc) {
-          await Chef.findOneAndUpdate(
-            { _id: chefDoc._id, activeOrders: { $gt: 0 } }, // only if > 0
-            { $inc: { activeOrders: -1 } }, // atomic decrement
-            { new: true }
-          );
-
-          const updatedChef = await Chef.findById(chefDoc._id);
-          console.log(
-            `✅ Chef ${updatedChef.name} activeOrders decremented safely → ${updatedChef.activeOrders}`
-          );
-        }
+        const updatedChef = await Chef.findById(existing.chef._id);
+        console.log(
+          `✅ Chef ${updatedChef.name} load reduced to ${updatedChef.activeOrders}`
+        );
       } else {
         console.warn(
           `⚠️ Skipping chef update for order ${id} — invalid or old chef reference.`
@@ -224,6 +222,7 @@ export const putOrderById = async (req, res) => {
     res.status(200).json({
       status: "success",
       message: `Order updated successfully${
+        previousStatus !== "served" &&
         status === "served" &&
         updated.chef &&
         typeof updated.chef !== "string"
@@ -241,6 +240,7 @@ export const putOrderById = async (req, res) => {
     });
   }
 };
+
 
 
 

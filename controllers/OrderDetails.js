@@ -174,6 +174,7 @@ export const putOrderById = async (req, res) => {
       });
     }
 
+    // ✅ Update only provided fields
     if (averageTime !== undefined) existing.averageTime = averageTime;
     if (status !== undefined) existing.status = status;
 
@@ -184,6 +185,7 @@ export const putOrderById = async (req, res) => {
       // 🪑 Free the table if dine-in
       if (existing.table) {
         await Table.findByIdAndUpdate(existing.table._id, { flag: false });
+        console.log(`🪑 Table ${existing.table.number} freed`);
       }
 
       // 👨‍🍳 Decrease chef load safely
@@ -195,18 +197,16 @@ export const putOrderById = async (req, res) => {
         const chefDoc = await Chef.findById(existing.chef._id);
 
         if (chefDoc) {
-          // 🔹 Atomic decrement
-          await Chef.findByIdAndUpdate(chefDoc._id, {
-            $inc: { activeOrders: -1 },
-          });
+          await Chef.findOneAndUpdate(
+            { _id: chefDoc._id, activeOrders: { $gt: 0 } }, // only if > 0
+            { $inc: { activeOrders: -1 } }, // atomic decrement
+            { new: true }
+          );
 
-          // 🛡 Ensure value never goes below 0
           const updatedChef = await Chef.findById(chefDoc._id);
-          if (updatedChef.activeOrders < 0) {
-            await Chef.findByIdAndUpdate(chefDoc._id, {
-              $set: { activeOrders: 0 },
-            });
-          }
+          console.log(
+            `✅ Chef ${updatedChef.name} activeOrders decremented safely → ${updatedChef.activeOrders}`
+          );
         }
       } else {
         console.warn(
@@ -224,7 +224,9 @@ export const putOrderById = async (req, res) => {
     res.status(200).json({
       status: "success",
       message: `Order updated successfully${
-        status === "served" && updated.chef && typeof updated.chef !== "string"
+        status === "served" &&
+        updated.chef &&
+        typeof updated.chef !== "string"
           ? ` — ${updated.chef.name}'s load reduced`
           : ""
       }`,
@@ -239,6 +241,7 @@ export const putOrderById = async (req, res) => {
     });
   }
 };
+
 
 
 

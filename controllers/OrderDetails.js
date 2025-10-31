@@ -175,12 +175,12 @@ export const putOrderById = async (req, res) => {
     }
 
     const previousStatus = existing.status;
-    console.log("➡️ PUT /order/" + id);
+    /*console.log("➡️ PUT /order/" + id);
     console.log("   🧾 Old status:", previousStatus);
     console.log("   🧾 New status:", status);
     console.log("   👨‍🍳 Chef ID:", existing.chef?._id);
     console.log("   👨‍🍳 Chef type:", typeof existing.chef);
-    console.log("   🧮 Current chef load:", existing.chef?.activeOrders);
+    console.log("   🧮 Current chef load:", existing.chef?.activeOrders);*/
 
     if (averageTime !== undefined) existing.averageTime = averageTime;
     if (status !== undefined) existing.status = status;

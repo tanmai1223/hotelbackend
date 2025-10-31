@@ -168,12 +168,12 @@ export const putOrderById = async (req, res) => {
       .populate("table");
 
     if (!existing) {
-      return res
-        .status(404)
-        .json({ status: "fail", message: "Order not found" });
+      return res.status(404).json({
+        status: "fail",
+        message: "Order not found",
+      });
     }
 
-    // ✅ Update only provided fields
     if (averageTime !== undefined) existing.averageTime = averageTime;
     if (status !== undefined) existing.status = status;
 
@@ -186,21 +186,27 @@ export const putOrderById = async (req, res) => {
         await Table.findByIdAndUpdate(existing.table._id, { flag: false });
       }
 
-      // 👨‍🍳 Reduce chef load safely — only if valid ObjectId
+      // 👨‍🍳 Decrease chef load safely
       if (
         existing.chef &&
-        typeof existing.chef !== "string" && // skip old string chefs
+        typeof existing.chef !== "string" &&
         existing.chef._id
       ) {
         const chefDoc = await Chef.findById(existing.chef._id);
 
         if (chefDoc) {
-          const newCount =
-            chefDoc.activeOrders > 0 ? chefDoc.activeOrders - 1 : 0;
-
+          // 🔹 Atomic decrement
           await Chef.findByIdAndUpdate(chefDoc._id, {
-            $set: { activeOrders: newCount },
+            $inc: { activeOrders: -1 },
           });
+
+          // 🛡 Ensure value never goes below 0
+          const updatedChef = await Chef.findById(chefDoc._id);
+          if (updatedChef.activeOrders < 0) {
+            await Chef.findByIdAndUpdate(chefDoc._id, {
+              $set: { activeOrders: 0 },
+            });
+          }
         }
       } else {
         console.warn(
@@ -233,6 +239,7 @@ export const putOrderById = async (req, res) => {
     });
   }
 };
+
 
 
 

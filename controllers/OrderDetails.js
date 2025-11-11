@@ -175,13 +175,17 @@ export const putOrderById = async (req, res) => {
     }
 
     const previousStatus = existing.status;
-    /*console.log("➡️ PUT /order/" + id);
-    console.log("   🧾 Old status:", previousStatus);
-    console.log("   🧾 New status:", status);
-    console.log("   👨‍🍳 Chef ID:", existing.chef?._id);
-    console.log("   👨‍🍳 Chef type:", typeof existing.chef);
-    console.log("   🧮 Current chef load:", existing.chef?.activeOrders);*/
 
+    // ⚙️ Skip update if same status — avoids unnecessary DB updates/logs
+    if (previousStatus === status) {
+      return res.status(200).json({
+        status: "success",
+        message: "No changes needed — status already up-to-date",
+        data: existing,
+      });
+    }
+
+    // ✅ Update fields safely
     if (averageTime !== undefined) existing.averageTime = averageTime;
     if (status !== undefined) existing.status = status;
 
@@ -189,38 +193,42 @@ export const putOrderById = async (req, res) => {
     // 🍽️ If status changes to "served"
     // =====================================================
     if (previousStatus !== "served" && status === "served") {
-      console.log("🟢 Status is being changed to served...");
+      console.log(`🟢 Order ${id} → Served`);
 
-      // Free the table
+      // 🪑 Free the table if dine-in
       if (existing.table) {
         await Table.findByIdAndUpdate(existing.table._id, { flag: false });
         console.log(`🪑 Table ${existing.table._id} freed`);
       }
 
-      // Decrement chef load safely
+      // 👨‍🍳 Decrement chef load safely
       if (existing.chef && existing.chef._id) {
-        const before = await Chef.findById(existing.chef._id);
-        console.log("Before decrement chef load:", before.activeOrders);
+        const chefBefore = await Chef.findById(existing.chef._id);
+        console.log("Before decrement chef load:", chefBefore.activeOrders);
 
-        const after = await Chef.findOneAndUpdate(
+        const chefAfter = await Chef.findOneAndUpdate(
           { _id: existing.chef._id, activeOrders: { $gt: 0 } },
           { $inc: { activeOrders: -1 } },
           { new: true }
         );
 
-        console.log("After decrement chef load:", after?.activeOrders);
+        console.log("After decrement chef load:", chefAfter?.activeOrders);
       } else {
-        console.log("⚠️ Skipping chef update — invalid or old reference");
+        console.log("⚠️ No valid chef reference — skipping chef update");
       }
     } else {
-      console.log("⚪ No change in chef or table (status unchanged)");
+      console.log(`⚪ No table/chef change — status was ${previousStatus}`);
     }
 
     await existing.save();
-    const updated = await Order.findById(id).populate("chef").populate("table");
+
+    const updated = await Order.findById(id)
+      .populate("chef")
+      .populate("table");
 
     res.status(200).json({
       status: "success",
+      message: "Order updated successfully",
       data: updated,
     });
   } catch (err) {
@@ -231,6 +239,7 @@ export const putOrderById = async (req, res) => {
     });
   }
 };
+
 
 
 
